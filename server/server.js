@@ -1,3 +1,5 @@
+import dns from 'dns';
+dns.setDefaultResultOrder('ipv4first'); // Add this line
 import express from 'express';
 import cors from 'cors';
 import 'dotenv/config';
@@ -9,15 +11,19 @@ import showRouter from './routes/showRoutes.js';
 import bookingRouter from './routes/bookingRoutes.js';
 import adminRouter from './routes/adminRoutes.js';
 import userRouter from './routes/userRoutes.js';
-import { stripeWebhooks } from './controllers/stripeWebhooks.js';
+import { razorpayWebhooks } from './controllers/razorpayWebhooks.js';
 
 const app = express();
 const port = 3000;
 
 await connectDB()
 
-// Stripe Webhooks Route
-app.use('/api/stripe', express.raw({type: 'application/json'}), stripeWebhooks)
+// Razorpay Webhooks Route (must be before JSON parser for raw body)
+app.post('/api/razorpay/webhook', express.raw({type: 'application/json'}), async (req, res) => {
+  req.rawBody = req.body;
+  req.body = JSON.parse(req.rawBody);
+  await razorpayWebhooks(req, res);
+})
 
 // Middleware
 app.use(express.json())

@@ -1,7 +1,8 @@
+import crypto from 'crypto';
 import { inngest } from "../inngest/index.js";
 import Booking from "../models/Booking.js";
 import Show from "../models/Show.js"
-import stripe from 'stripe'
+import Razorpay from 'razorpay'
 
 
 // Function to check availability of selected seats for a movie
@@ -53,36 +54,38 @@ export const createBooking = async (req, res)=>{
 
         await showData.save();
 
-         // Stripe Gateway Initialize
-         const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
-
-         // Creating line items to for Stripe
-         const line_items = [{
-            price_data: {
-                currency: 'usd',
-                product_data:{
-                    name: showData.movie.title
-                },
-                unit_amount: Math.floor(booking.amount) * 100
-            },
-            quantity: 1
-         }]
-
-         const session = await stripeInstance.checkout.sessions.create({
-            success_url: `${origin}/loading/my-bookings`,
-            cancel_url: `${origin}/my-bookings`,
-            line_items: line_items,
-            mode: 'payment',
-            metadata: {
-                bookingId: booking._id.toString()
-            },
-            expires_at: Math.floor(Date.now() / 1000) + 30 * 60, // Expires in 30 minutes
+         // Razorpay Gateway Initialize
+         const razorpayInstance = new Razorpay({
+            key_id: process.env.RAZORPAY_KEY_ID,
+            key_secret: process.env.RAZORPAY_SECRET_KEY
          })
 
-         booking.paymentLink = session.url
+         // Create Razorpay Order
+         const orderOptions = {
+            amount: Math.floor(booking.amount) * 100, // Amount in paise (smallest unit)
+            currency: 'INR',
+            receipt: booking._id.toString(),
+            notes: {
+                bookingId: booking._id.toString(),
+                movieTitle: showData.movie.title,
+                userEmail: req.auth().user?.primaryEmailAddress?.emailAddress || 'user@example.com'
+            }
+         }
+
+         const order = await razorpayInstance.orders.create(orderOptions);
+
+         booking.razorpayOrderId = order.id;
+         booking.paymentLink = `${origin}/checkout?orderId=${order.id}&bookingId=${booking._id}`;
          await booking.save()
 
-         // Run Inngest Sheduler Function to check payment status after 10 minutes
+         console.log("[booking/create] Razorpay order", {
+            orderId: order.id,
+            amount: order.amount,
+            currency: order.currency,
+            bookingId: booking._id.toString(),
+         })
+
+         // Run Inngest Scheduler Function to check payment status after 10 minutes
          await inngest.send({
             name: "app/checkpayment",
             data: {
@@ -90,11 +93,58 @@ export const createBooking = async (req, res)=>{
             }
          })
 
-         res.json({success: true, url: session.url})
+         res.json({
+            success: true,
+            orderId: order.id,
+            url: booking.paymentLink,
+            razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+            amount: Math.floor(booking.amount) * 100,
+            bookingId: booking._id.toString()
+         })
 
     } catch (error) {
         console.log(error.message);
         res.json({success: false, message: error.message})
+    }
+}
+
+export const verifyBookingPayment = async (req, res)=>{
+    try {
+        const { orderId, paymentId, signature, bookingId } = req.body;
+
+        const razorpayInstance = new Razorpay({
+            key_id: process.env.RAZORPAY_KEY_ID,
+            key_secret: process.env.RAZORPAY_SECRET_KEY
+        });
+
+        // Razorpay verification: HMAC SHA256 over orderId|paymentId
+        const generated_signature = crypto
+            .createHmac('sha256', process.env.RAZORPAY_SECRET_KEY)
+            .update(`${orderId}|${paymentId}`)
+            .digest('hex');
+
+        if (generated_signature !== signature) {
+            console.error('[verifyBookingPayment] signature mismatch', { orderId, paymentId, signature, generated_signature });
+            return res.status(400).json({ success: false, message: 'Payment signature verification failed.' });
+        }
+
+        await Booking.findByIdAndUpdate(bookingId, {
+            isPaid: true,
+            paymentStatus: 'captured',
+            razorpayOrderId: orderId,
+            razorpayPaymentId: paymentId,
+            paymentLink: ''
+        });
+
+        await inngest.send({
+            name: 'app/show.booked',
+            data: { bookingId }
+        });
+
+        return res.json({ success: true, message: 'Payment verified successfully.' });
+    } catch (error) {
+        console.error('verifyBookingPayment error:', error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 }
 

@@ -12,7 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@clerk/express": "^1.5.2",
+    "@clerk/express": "^1.7.77",
     "axios": "^1.9.0",
     "cloudinary": "^2.6.1",
     "cors": "^2.8.5",
@@ -21,10 +21,10 @@
     "inngest": "^3.38.0",
     "mongoose": "^8.15.1",
     "nodemailer": "^7.0.3",
-    "stripe": "^18.2.1",
+    "razorpay": "^2.9.1",
     "svix": "^1.66.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.10"
+    "nodemon": "^3.1.14"
   }
 }
